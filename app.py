@@ -103,4 +103,102 @@ def format_excel(writer, sheet_name):
     thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     
     for cell in worksheet[1]:
-        cell.fill = header_fill; cell.font =
+        cell.fill = header_fill; cell.font = header_font; cell.alignment = Alignment(horizontal="center", vertical="center"); cell.border = thin_border
+    worksheet.freeze_panes = "A2"
+    for col in worksheet.columns:
+        max_length = 0
+        column = col[0].column_letter
+        for cell in col:
+            cell.border = thin_border
+            if cell.row > 1: cell.alignment = Alignment(vertical="center", horizontal="center")
+            try:
+                if len(str(cell.value)) > max_length: max_length = len(str(cell.value))
+            except: pass
+        worksheet.column_dimensions[column].width = min((max_length + 2), 45)
+
+# ==========================================
+# 2. INTERFACE APP
+# ==========================================
+st.set_page_config(page_title="Extrator BOM Web", layout="wide", page_icon="🚜")
+st.title("🚜 Extrator Automotivo BOM - Robô Visual")
+
+st.markdown("""
+<div style='background-color: #2F4F4F; padding: 15px; border-radius: 10px; color: white; font-size: 14px;'>
+<strong>💡 Acesso Liberado e Sem Quedas:</strong> Desenhe o enquadramento no Mapa Geral, confira a leitura na Lupa abaixo (ela tem o Zoom nativo de 4K, enquanto o Mapa foi otimizado) e Extraia! 
+</div>
+""", unsafe_allow_html=True)
+
+if 'pdf_bytes' not in st.session_state: st.session_state.pdf_bytes = None
+if 'page_count' not in st.session_state: st.session_state.page_count = 0
+if 'extracted_tables' not in st.session_state: st.session_state.extracted_tables = []
+
+st.sidebar.markdown("### Painel de Nuvem")
+uploaded_file = st.sidebar.file_uploader("1. Faça o Upload do PDF (Max 200MB)", type=['pdf'])
+
+if uploaded_file is not None:
+    st.session_state.pdf_bytes = uploaded_file.read()
+    doc = fitz.open(stream=st.session_state.pdf_bytes, filetype="pdf")
+    st.session_state.page_count = doc.page_count
+    doc.close()
+    
+    page_num = st.sidebar.number_input("Página da Folha", min_value=1, max_value=st.session_state.page_count, value=1) - 1
+    
+    img, pt_w, pt_h, img_w, img_h = get_page_image(st.session_state.pdf_bytes, page_num)
+    
+    st.markdown("---")
+    st.subheader("1. Mapa Geral (Selecione o Corte)")
+    
+    box = st_cropper(img, realtime_update=True, box_color='#FF0000', aspect_ratio=None, return_type='box')
+    
+    st.markdown("---")
+    st.subheader("🔍 2. Lupa Fotográfica Exata (Confirme o enquadramento aqui)")
+    
+    lupa_img = get_highres_crop(st.session_state.pdf_bytes, page_num, box, img_w, img_h)
+    st.image(lupa_img)
+    
+    st.markdown("---")
+    st.subheader("⚙️ 3. Ação & Exportação Custeio Automático")
+    
+    col_a, col_b = st.columns([1, 1])
+    with col_a:
+        if st.button("▶️ Extrair Tabela Focalizada na Lupa", type="primary"):
+            with st.spinner("Analisando micro-medidas de colunas..."):
+                try:
+                    df = extract_table_from_bbox(st.session_state.pdf_bytes, page_num, box, pt_w, pt_h, img_w, img_h)
+                    if df is not None and not df.empty:
+                        st.session_state.extracted_tables.append(df)
+                        st.success(f"Nuvem validou! {len(df)} linhas limpas importadas.")
+                except ValueError as ve:
+                    if str(ve) == "SCANNED_PDF": st.error("🚨 PDF ESCANEADO (Bateu na Barreira!): O PDF não é vetor, logo o motor não consegue separar letras da tinta branca da foto. Exportar arquivos originais por favor!")
+                    elif str(ve) == "WRONG_BBOX": st.error("🚨 CAIXA VAZIA (Z-Index Erro): A lupa ou está isolando uma parte gráfica vazia (que não tem letrinhas), ou um bug de margem do AutoCAD atacou. Se estiver pegando texto, avise o Dev.")
+                    else: st.error(f"Erro Incomum: {str(ve)}")
+                except Exception as e:
+                    st.error(f"Erro Crítico Total: {str(e)}")
+
+    with col_b:
+        st.write(f"Estocadas na Memória Principal: **{len(st.session_state.extracted_tables)} aba(s)**")
+        if st.button("🗑️ Esvaziar Extrator (Começar do Zero)"):
+            st.session_state.extracted_tables = []
+            st.rerun()
+
+    if len(st.session_state.extracted_tables) > 0:
+        st.markdown("### Prévia Oficial:")
+        st.dataframe(st.session_state.extracted_tables[-1].head(10))
+        
+        excel_buffer = io.BytesIO()
+        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+            for i, df in enumerate(st.session_state.extracted_tables):
+                sheet_name = f"Tabela_{i+1}"
+                df.to_excel(writer, sheet_name=sheet_name, index=False)
+                format_excel(writer, sheet_name)
+        
+        st.download_button(
+            label="📁 Fazer Download da Planilha Excel OficialJD (Formatada)",
+            data=excel_buffer.getvalue(),
+            file_name="BOM_Dados_Gerais_Web_Sniper.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary"
+        )
+else:
+    st.info("👈 Operação aguardando PDF Vetorial de Engenharia no menu lateral.")
+
