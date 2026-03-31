@@ -3,88 +3,164 @@ from streamlit_cropper import st_cropper
 import fitz
 import pandas as pd
 import io
-import utils
+from PIL import Image
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
-st.set_page_config(page_title="Extrator Visual BOM", layout="wide", page_icon="🚜")
+# ==========================================
+# 1. MOTOR (Substitui o antigo utils.py)
+# ==========================================
+def get_page_image(pdf_bytes, page_num, zoom=3.0):
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    page = doc[page_num]
+    mat = fitz.Matrix(zoom, zoom)
+    pix = page.get_pixmap(matrix=mat)
+    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+    return img, page.rect.width, page.rect.height, pix.width, pix.height
+
+def deduplicate_columns(cols):
+    seen, new_cols = {}, []
+    for c in cols:
+        c_str = str(c).strip() if c else "Vazio"
+        if not c_str: c_str = "Vazio"
+        if c_str in seen:
+            seen[c_str] += 1
+            new_cols.append(f"{c_str}_{seen[c_str]}")
+        else:
+            seen[c_str] = 0
+            new_cols.append(c_str)
+    return new_cols
+
+def extract_table_from_bbox(pdf_bytes, page_num, bbox, pt_width, pt_height, img_width, img_height):
+    left, top, width, height = bbox['left'], bbox['top'], bbox['width'], bbox['height']
+    right, bottom = left + width, top + height
+    pdf_stream = io.BytesIO(pdf_bytes)
+    
+    with pdfplumber.open(pdf_stream) as pdf:
+        page = pdf.pages[page_num]
+        ratio_x = float(page.width) / float(img_width)
+        ratio_y = float(page.height) / float(img_height)
+        
+        pdf_bbox = ((left * ratio_x) - 1, (top * ratio_y) - 1, (right * ratio_x) + 1, (bottom * ratio_y) + 1)
+        cropped = page.within_bbox(pdf_bbox)
+        
+        table = cropped.extract_table({"vertical_strategy": "text", "horizontal_strategy": "text", "intersection_y_tolerance": 5})
+        
+        if not table or len(table) == 0:
+            text = cropped.extract_text()
+            if text:
+                table = [line.split() for line in text.split('\n') if line.strip()]
+        
+        if table and len(table) > 0:
+            cleaned_table = []
+            for row in table:
+                c_row = [str(cell).strip() if cell else "" for cell in row]
+                if any(cell not in ("", "-", "None") for cell in c_row):
+                    c_row = ["" if cell == "-" else cell for cell in c_row]
+                    cleaned_table.append(c_row)
+                    
+            table = cleaned_table
+            if len(table) > 1:
+                return pd.DataFrame(table[1:], columns=deduplicate_columns(table[0]))
+            elif len(table) == 1:
+                return pd.DataFrame(table)
+        
+        full_text = page.extract_text()
+        if not full_text or len(full_text.strip()) < 5:
+            raise ValueError("SCANNED_PDF")
+        else:
+            raise ValueError("WRONG_BBOX")
+
+def format_excel(writer, sheet_name):
+    worksheet = writer.sheets[sheet_name]
+    header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+    header_font = Font(color="FFFFFF", bold=True)
+    thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+    
+    for cell in worksheet[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = thin_border
+    worksheet.freeze_panes = "A2"
+    for col in worksheet.columns:
+        max_length = 0
+        column = col[0].column_letter
+        for cell in col:
+            cell.border = thin_border
+            if cell.row > 1:
+                cell.alignment = Alignment(vertical="center", horizontal="center")
+            try:
+                if len(str(cell.value)) > max_length:
+                    max_length = len(str(cell.value))
+            except: pass
+        worksheet.column_dimensions[column].width = min((max_length + 2), 45)
+
+# ==========================================
+# 2. INTERFACE (App Web Principal)
+# ==========================================
+st.set_page_config(page_title="Extrator BOM", layout="wide", page_icon="🚜")
 st.title("🚜 Extrator Automotivo BOM - Inteligência PDF")
 
 st.markdown("""
 <div style='background-color: #2F4F4F; padding: 15px; border-radius: 10px; color: white; font-size: 14px;'>
-<strong>💡 Lupa de Alta Definição Automática</strong><br>
-Para extrair um PDF enorme com letras minúsculas sem errar o quadro, nós construímos uma Zoom Camera!<br>
-1. Desenhe um quadrado por cima de onde está a Tabela.<br>
-2. A Lupa logo abaixo projetará um Zoom Gigante e Nítido do texto! Ajuste o quadrado até que as palavras na lupa fiquem perfeitamente isoladas, e pressione Extrair.
+<strong>💡 Dica de Operação Web Automática:</strong><br><br>
+1. Desenhe um quadrado na área visual onde está a Tabela de BOM.<br>
+2. Olhe a "Lupa Fotográfica" gerada em tempo real na tela para confirmar seu próprio enquadramento contra distorções e aperte Extrair!
 </div>
 """, unsafe_allow_html=True)
 
-if 'pdf_bytes' not in st.session_state:
-    st.session_state.pdf_bytes = None
-if 'page_count' not in st.session_state:
-    st.session_state.page_count = 0
-if 'extracted_tables' not in st.session_state:
-    st.session_state.extracted_tables = []
+if 'pdf_bytes' not in st.session_state: st.session_state.pdf_bytes = None
+if 'page_count' not in st.session_state: st.session_state.page_count = 0
+if 'extracted_tables' not in st.session_state: st.session_state.extracted_tables = []
 
-st.sidebar.markdown("### Configuração")
-uploaded_file = st.sidebar.file_uploader("1. Faça o Upload do PDF", type=['pdf'])
+st.sidebar.markdown("### Processamento")
+uploaded_file = st.sidebar.file_uploader("1. Faça o Upload do Desenho PDF", type=['pdf'])
 
 if uploaded_file is not None:
     st.session_state.pdf_bytes = uploaded_file.read()
-    
     doc = fitz.open(stream=st.session_state.pdf_bytes, filetype="pdf")
     st.session_state.page_count = doc.page_count
     
-    page_num = st.sidebar.number_input("Página Atual", min_value=1, max_value=st.session_state.page_count, value=1) - 1
-    
-    img, pt_w, pt_h, img_w, img_h = utils.get_page_image(st.session_state.pdf_bytes, page_num)
+    page_num = st.sidebar.number_input("Página Analisada", min_value=1, max_value=st.session_state.page_count, value=1) - 1
+    img, pt_w, pt_h, img_w, img_h = get_page_image(st.session_state.pdf_bytes, page_num)
     
     st.markdown("---")
-    st.subheader("1. Mapa Geral (Selecione a Região)")
-    
+    st.subheader("1. Mapa Geral (Posicione o Corte)")
     box = st_cropper(img, realtime_update=True, box_color='#FF0000', aspect_ratio=None, return_type='box')
     
     st.markdown("---")
-    st.subheader("🔍 2. Lupa de Precisão (Evita Extração Vazia)")
-    st.info("Veja aqui se o quadrado capturou as bordas superiores, inferiores e laterais do texto inteiro.\n Ajuste o quadro acima e o Zoom focará automaticamente!")
-    
+    st.subheader("🔍 2. Lupa de Controle Técnico (Zoom Ótico)")
     left, top, width, height = box['left'], box['top'], box['width'], box['height']
     cropped_preview = img.crop((left, top, left + width, top + height))
-    
     st.image(cropped_preview, use_container_width=True)
     
     st.markdown("---")
-    st.subheader("⚙️ 3. Processamento e Exportação")
+    st.subheader("⚙️ 3. Ação & Exportação Custeio")
     
     col_a, col_b = st.columns([1, 1])
-    
     with col_a:
-        if st.button("▶️ Extrair Tabela que aparece na Lupa", type="primary"):
-            with st.spinner("Decodificando texto matemático do PDF..."):
+        if st.button("▶️ Extrair Tabela Focalizada na Lupa", type="primary"):
+            with st.spinner("Rasterizando e decodificando linhas..."):
                 try:
-                    df = utils.extract_table_from_bbox(
-                        st.session_state.pdf_bytes, page_num, box, 
-                        pt_w, pt_h, img_w, img_h
-                    )
+                    df = extract_table_from_bbox(st.session_state.pdf_bytes, page_num, box, pt_w, pt_h, img_w, img_h)
                     if df is not None and not df.empty:
                         st.session_state.extracted_tables.append(df)
-                        st.success(f"Matriz extraída perfeitamente! Capturadas {len(df)} linhas.")
+                        st.success(f"Matriz validada! {len(df)} linhas prontas.")
                 except ValueError as ve:
-                    if str(ve) == "SCANNED_PDF":
-                        st.error("🚨 PDF ESCANEADO (IMAGEM) DETECTADO! Este documento é como uma foto (não tem texto vetorial embarcado). O motor só consegue extrair planilhas de desenhos PDF exportados nativamente do software de desenho.")
-                    elif str(ve) == "WRONG_BBOX":
-                        st.error("🚨 DESALINHAMENTO TÉCNICO: O PDF tem texto livre, mas o software de quem desenhou a planilha inverteu silenciosamente ou recuou o eixo de dimensão das páginas!")
-                    else:
-                        st.error(f"Erro Inesperado Python: {str(ve)}")
+                    if str(ve) == "SCANNED_PDF": st.error("🚨 PDF ESCANEADO (TIPO IMAGEM): O Software não detectou texto eletrônico de máquina! Isso é como uma foto.")
+                    elif str(ve) == "WRONG_BBOX": st.error("🚨 DESALINHAMENTO TÉCNICO VETORIAL: A extração caiu fora das margens vetoriais do texto do document. Use PDFs com vetores padronizados ou avise-me sobre erro 2B.")
+                    else: st.error(f"Erro Inesperado Python: {str(ve)}")
                 except Exception as e:
-                    st.error(f"Ocorreu um Erro Crítico: {str(e)}")
+                    st.error(f"Ocorreu um Erro Crítico do Servidor: {str(e)}")
 
     with col_b:
-        st.write(f"Tabelas Prontas na Fila: **{len(st.session_state.extracted_tables)}**")
-        if st.button("🗑️ Limpar Fila (Reset)"):
+        st.write(f"Na Memória (Prontas): **{len(st.session_state.extracted_tables)} aba(s)**")
+        if st.button("🗑️ Resetar Tudo (Limpar Fila)"):
             st.session_state.extracted_tables = []
             st.rerun()
 
     if len(st.session_state.extracted_tables) > 0:
-        st.markdown("### Prévia da Última Tabela Estocada:")
+        st.markdown("### Base de Dados (Última Extraída):")
         st.dataframe(st.session_state.extracted_tables[-1].head(10), use_container_width=True)
         
         excel_buffer = io.BytesIO()
@@ -92,14 +168,14 @@ if uploaded_file is not None:
             for i, df in enumerate(st.session_state.extracted_tables):
                 sheet_name = f"Tabela_{i+1}"
                 df.to_excel(writer, sheet_name=sheet_name, index=False)
-                utils.format_excel(writer, sheet_name)
+                format_excel(writer, sheet_name)
         
         st.download_button(
-            label="📁 Fazer Download da Planilha Excel",
+            label="📁 BAixar Planilha Completa de Excel (Formatada)",
             data=excel_buffer.getvalue(),
-            file_name="BOM_Dados_Gerais_Web.xlsx",
+            file_name="BOM_Corporativo.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary"
         )
 else:
-    st.info("👈 Use o painel lateral para carregar um chicote/documento.")
+    st.info("👈 Alimente o sistema via Painel Lateral e inicie o extrator.")
