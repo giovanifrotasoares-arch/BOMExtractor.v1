@@ -3,8 +3,8 @@ import pdfplumber
 import pandas as pd
 from PIL import Image
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-
-def get_page_image(pdf_bytes, page_num, zoom=2.0):
+# Aumentamos o Zoom para 3.0 (Altíssima Definição) para a Lupa não borrar
+def get_page_image(pdf_bytes, page_num, zoom=3.0):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     page = doc[page_num]
     mat = fitz.Matrix(zoom, zoom)
@@ -12,7 +12,6 @@ def get_page_image(pdf_bytes, page_num, zoom=2.0):
     
     img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
     return img, page.rect.width, page.rect.height, pix.width, pix.height
-
 def extract_table_from_bbox(pdf_bytes, page_num, bbox, pt_width, pt_height, img_width, img_height):
     ratio_x = pt_width / img_width
     ratio_y = pt_height / img_height
@@ -24,11 +23,12 @@ def extract_table_from_bbox(pdf_bytes, page_num, bbox, pt_width, pt_height, img_
     right = left + width
     bottom = top + height
     
+    # Margem de segurança sutil (expande o quadro 1pt matemático) para não cortar letras nas bordas
     pdf_bbox = (
-        left * ratio_x,
-        top * ratio_y,
-        right * ratio_x,
-        bottom * ratio_y
+        (left * ratio_x) - 1,
+        (top * ratio_y) - 1,
+        (right * ratio_x) + 1,
+        (bottom * ratio_y) + 1
     )
     
     with pdfplumber.open(pdf_bytes) as pdf:
@@ -56,14 +56,12 @@ def extract_table_from_bbox(pdf_bytes, page_num, bbox, pt_width, pt_height, img_
                     cleaned_table.append(c_row)
                     
             table = cleaned_table
-
             if len(table) > 1:
                 return pd.DataFrame(table[1:], columns=table[0])
             elif len(table) == 1:
                 return pd.DataFrame(table)
             
     return None
-
 def format_excel(writer, sheet_name):
     worksheet = writer.sheets[sheet_name]
     header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
