@@ -4,7 +4,7 @@ import pandas as pd
 import io
 from PIL import Image
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-# Aumentamos o Zoom para 3.0 (Altíssima Definição) para a Lupa não borrar
+
 def get_page_image(pdf_bytes, page_num, zoom=3.0):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     page = doc[page_num]
@@ -13,7 +13,7 @@ def get_page_image(pdf_bytes, page_num, zoom=3.0):
     
     img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
     return img, page.rect.width, page.rect.height, pix.width, pix.height
-# --- CORREÇÃO DE BUG: Renomear Colunas Duplicadas que quebram a Nuvem ---
+
 def deduplicate_columns(cols):
     seen = {}
     new_cols = []
@@ -26,10 +26,8 @@ def deduplicate_columns(cols):
             seen[c_str] = 0
             new_cols.append(c_str)
     return new_cols
+
 def extract_table_from_bbox(pdf_bytes, page_num, bbox, pt_width, pt_height, img_width, img_height):
-    ratio_x = pt_width / img_width
-    ratio_y = pt_height / img_height
-    
     left = bbox['left']
     top = bbox['top']
     width = bbox['width']
@@ -37,18 +35,22 @@ def extract_table_from_bbox(pdf_bytes, page_num, bbox, pt_width, pt_height, img_
     right = left + width
     bottom = top + height
     
-    # Margem de segurança sutil
-    pdf_bbox = (
-        (left * ratio_x) - 1,
-        (top * ratio_y) - 1,
-        (right * ratio_x) + 1,
-        (bottom * ratio_y) + 1
-    )
-    
     pdf_stream = io.BytesIO(pdf_bytes)
     
     with pdfplumber.open(pdf_stream) as pdf:
         page = pdf.pages[page_num]
+        
+        # Garantia de Geometria: Usa estritamente a visão de dimensões do próprio pdfplumber
+        ratio_x = float(page.width) / float(img_width)
+        ratio_y = float(page.height) / float(img_height)
+        
+        pdf_bbox = (
+            (left * ratio_x) - 1,
+            (top * ratio_y) - 1,
+            (right * ratio_x) + 1,
+            (bottom * ratio_y) + 1
+        )
+        
         cropped = page.within_bbox(pdf_bbox)
         
         table_settings = {
@@ -72,13 +74,21 @@ def extract_table_from_bbox(pdf_bytes, page_num, bbox, pt_width, pt_height, img_
                     cleaned_table.append(c_row)
                     
             table = cleaned_table
+
             if len(table) > 1:
                 unique_cols = deduplicate_columns(table[0])
                 return pd.DataFrame(table[1:], columns=unique_cols)
             elif len(table) == 1:
                 return pd.DataFrame(table)
-            
-    return None
+        
+        # ------------------ MODO DIAGNÓSTICO ------------------
+        # Se chegou aqui, a área extraída não tinha texto nenhum. Vamos descobrir por quê!
+        full_text = page.extract_text()
+        if not full_text or len(full_text.strip()) < 5:
+            raise ValueError("SCANNED_PDF")
+        else:
+            raise ValueError("WRONG_BBOX")
+
 def format_excel(writer, sheet_name):
     worksheet = writer.sheets[sheet_name]
     header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
