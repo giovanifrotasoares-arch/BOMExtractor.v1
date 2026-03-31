@@ -4,6 +4,7 @@ import pandas as pd
 import io
 from PIL import Image
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
 def get_page_image(pdf_bytes, page_num, zoom=3.0):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     page = doc[page_num]
@@ -12,6 +13,7 @@ def get_page_image(pdf_bytes, page_num, zoom=3.0):
     
     img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
     return img, page.rect.width, page.rect.height, pix.width, pix.height
+
 def deduplicate_columns(cols):
     seen = {}
     new_cols = []
@@ -24,6 +26,7 @@ def deduplicate_columns(cols):
             seen[c_str] = 0
             new_cols.append(c_str)
     return new_cols
+
 def extract_table_from_bbox(pdf_bytes, page_num, bbox, pt_width, pt_height, img_width, img_height):
     left = bbox['left']
     top = bbox['top']
@@ -70,6 +73,7 @@ def extract_table_from_bbox(pdf_bytes, page_num, bbox, pt_width, pt_height, img_
                     cleaned_table.append(c_row)
                     
             table = cleaned_table
+
             if len(table) > 1:
                 unique_cols = deduplicate_columns(table[0])
                 return pd.DataFrame(table[1:], columns=unique_cols)
@@ -81,6 +85,7 @@ def extract_table_from_bbox(pdf_bytes, page_num, bbox, pt_width, pt_height, img_
             raise ValueError("SCANNED_PDF")
         else:
             raise ValueError("WRONG_BBOX")
+
 def format_excel(writer, sheet_name):
     worksheet = writer.sheets[sheet_name]
     header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
