@@ -37,7 +37,6 @@ def extract_table_from_bbox(pdf_bytes, page_num, bbox, pt_width, pt_height, img_
     with pdfplumber.open(pdf_stream) as pdf:
         page = pdf.pages[page_num]
         
-        # Garantia de Geometria: Usa estritamente a visão de dimensões do próprio pdfplumber
         ratio_x = float(page.width) / float(img_width)
         ratio_y = float(page.height) / float(img_height)
         
@@ -77,8 +76,6 @@ def extract_table_from_bbox(pdf_bytes, page_num, bbox, pt_width, pt_height, img_
             elif len(table) == 1:
                 return pd.DataFrame(table)
         
-        # ------------------ MODO DIAGNÓSTICO ------------------
-        # Se chegou aqui, a área extraída não tinha texto nenhum. Vamos descobrir por quê!
         full_text = page.extract_text()
         if not full_text or len(full_text.strip()) < 5:
             raise ValueError("SCANNED_PDF")
