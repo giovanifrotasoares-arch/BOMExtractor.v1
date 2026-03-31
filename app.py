@@ -7,15 +7,39 @@ from PIL import Image
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 # ==========================================
-# 1. MOTOR (Substitui o antigo utils.py)
+# 1. MOTOR (Coração Anti-Estouro de RAM)
 # ==========================================
-def get_page_image(pdf_bytes, page_num, zoom=3.0):
+def get_page_image(pdf_bytes, page_num):
+    # Zoom Leve = 1.0 (Economiza aprox. 95% da memoria e evita que a Nuvem crashe!)
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     page = doc[page_num]
-    mat = fitz.Matrix(zoom, zoom)
+    mat = fitz.Matrix(1.0, 1.0)
     pix = page.get_pixmap(matrix=mat)
     img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+    doc.close()
     return img, page.rect.width, page.rect.height, pix.width, pix.height
+
+def get_highres_crop(pdf_bytes, page_num, bbox, img_width, img_height):
+    # Inteligência de Corte: Renderiza direto do VETOR do PDF com Zoom em 4K focando SOMENTE 
+    # as medidas matemáticas do quadrado vermelho, assim não gera fotos gigantes na RAM!
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    page = doc[page_num]
+    
+    ratio_x = float(page.rect.width) / float(img_width)
+    ratio_y = float(page.rect.height) / float(img_height)
+    
+    pdf_rect = fitz.Rect(
+        bbox['left'] * ratio_x,
+        bbox['top'] * ratio_y,
+        (bbox['left'] + bbox['width']) * ratio_x,
+        (bbox['top'] + bbox['height']) * ratio_y
+    )
+    
+    mat = fitz.Matrix(4.0, 4.0) # Ultra Zoom 400% SÓ NA LUPA!
+    pix = page.get_pixmap(matrix=mat, clip=pdf_rect)
+    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+    doc.close()
+    return img
 
 def deduplicate_columns(cols):
     seen, new_cols = {}, []
@@ -47,8 +71,7 @@ def extract_table_from_bbox(pdf_bytes, page_num, bbox, pt_width, pt_height, img_
         
         if not table or len(table) == 0:
             text = cropped.extract_text()
-            if text:
-                table = [line.split() for line in text.split('\n') if line.strip()]
+            if text: table = [line.split() for line in text.split('\n') if line.strip()]
         
         if table and len(table) > 0:
             cleaned_table = []
@@ -59,16 +82,13 @@ def extract_table_from_bbox(pdf_bytes, page_num, bbox, pt_width, pt_height, img_
                     cleaned_table.append(c_row)
                     
             table = cleaned_table
-            if len(table) > 1:
-                return pd.DataFrame(table[1:], columns=deduplicate_columns(table[0]))
-            elif len(table) == 1:
-                return pd.DataFrame(table)
+            if len(table) > 1: return pd.DataFrame(table[1:], columns=deduplicate_columns(table[0]))
+            elif len(table) == 1: return pd.DataFrame(table)
         
         full_text = page.extract_text()
-        if not full_text or len(full_text.strip()) < 5:
-            raise ValueError("SCANNED_PDF")
-        else:
-            raise ValueError("WRONG_BBOX")
+        if not full_text: raise ValueError("SCANNED_PDF")
+        elif len(full_text.strip()) < 5: raise ValueError("SCANNED_PDF")
+        else: raise ValueError("WRONG_BBOX")
 
 def format_excel(writer, sheet_name):
     worksheet = writer.sheets[sheet_name]
@@ -77,35 +97,29 @@ def format_excel(writer, sheet_name):
     thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     
     for cell in worksheet[1]:
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.alignment = Alignment(horizontal="center", vertical="center")
-        cell.border = thin_border
+        cell.fill = header_fill; cell.font = header_font; cell.alignment = Alignment(horizontal="center", vertical="center"); cell.border = thin_border
     worksheet.freeze_panes = "A2"
     for col in worksheet.columns:
         max_length = 0
         column = col[0].column_letter
         for cell in col:
             cell.border = thin_border
-            if cell.row > 1:
-                cell.alignment = Alignment(vertical="center", horizontal="center")
+            if cell.row > 1: cell.alignment = Alignment(vertical="center", horizontal="center")
             try:
-                if len(str(cell.value)) > max_length:
-                    max_length = len(str(cell.value))
+                if len(str(cell.value)) > max_length: max_length = len(str(cell.value))
             except: pass
         worksheet.column_dimensions[column].width = min((max_length + 2), 45)
 
 # ==========================================
-# 2. INTERFACE (App Web Principal)
+# 2. INTERFACE APP
 # ==========================================
-st.set_page_config(page_title="Extrator BOM", layout="wide", page_icon="🚜")
-st.title("🚜 Extrator Automotivo BOM - Inteligência PDF")
+st.set_page_config(page_title="Extrator BOM Web", layout="wide", page_icon="🚜")
+st.title("🚜 Extrator Automotivo BOM - Robô Visual")
 
 st.markdown("""
 <div style='background-color: #2F4F4F; padding: 15px; border-radius: 10px; color: white; font-size: 14px;'>
-<strong>💡 Dica de Operação Web Automática:</strong><br><br>
-1. Desenhe um quadrado na área visual onde está a Tabela de BOM.<br>
-2. Olhe a "Lupa Fotográfica" gerada em tempo real na tela para confirmar seu próprio enquadramento contra distorções e aperte Extrair!
+<strong>💡 Motor em Modo Anti-Crash (Leve):</strong> O servidor da nuvem não travará mais sua aba do seu Chrome, o zoom renderiza localmente apenas dentro do quadrado vermelho. <br>
+Role a página, coloque o quadro vermelho abraçando a Tabela, confira pela Lupa Ótica (item 2) se não cortou nenhuma letra, e Extraia!
 </div>
 """, unsafe_allow_html=True)
 
@@ -113,55 +127,61 @@ if 'pdf_bytes' not in st.session_state: st.session_state.pdf_bytes = None
 if 'page_count' not in st.session_state: st.session_state.page_count = 0
 if 'extracted_tables' not in st.session_state: st.session_state.extracted_tables = []
 
-st.sidebar.markdown("### Processamento")
-uploaded_file = st.sidebar.file_uploader("1. Faça o Upload do Desenho PDF", type=['pdf'])
+st.sidebar.markdown("### Painel de Nuvem")
+uploaded_file = st.sidebar.file_uploader("1. Faça o Upload do PDF (Max 200MB)", type=['pdf'])
 
 if uploaded_file is not None:
     st.session_state.pdf_bytes = uploaded_file.read()
     doc = fitz.open(stream=st.session_state.pdf_bytes, filetype="pdf")
     st.session_state.page_count = doc.page_count
+    doc.close()
     
-    page_num = st.sidebar.number_input("Página Analisada", min_value=1, max_value=st.session_state.page_count, value=1) - 1
+    page_num = st.sidebar.number_input("Página da Folha", min_value=1, max_value=st.session_state.page_count, value=1) - 1
+    
+    # Renderiza e exibe sem Zoom para economizar 95% da memória RAM.
     img, pt_w, pt_h, img_w, img_h = get_page_image(st.session_state.pdf_bytes, page_num)
     
     st.markdown("---")
-    st.subheader("1. Mapa Geral (Posicione o Corte)")
+    st.subheader("1. Mapa Geral (Selecione o Corte)")
+    
+    # st_cropper roda mega fluido e sem lags graças ao arquivo Low Res nativo
     box = st_cropper(img, realtime_update=True, box_color='#FF0000', aspect_ratio=None, return_type='box')
     
     st.markdown("---")
-    st.subheader("🔍 2. Lupa de Controle Técnico (Zoom Ótico)")
-    left, top, width, height = box['left'], box['top'], box['width'], box['height']
-    cropped_preview = img.crop((left, top, left + width, top + height))
-    st.image(cropped_preview, use_container_width=True)
+    st.subheader("🔍 2. Lupa Fotográfica Exata (Confirme o enquadramento aqui)")
+    
+    # A Magia Acontece aqui: Chamamos diretamente do PDF só os milimetros da caixa, mas com Zoom de 400%!
+    lupa_img = get_highres_crop(st.session_state.pdf_bytes, page_num, box, img_w, img_h)
+    st.image(lupa_img)
     
     st.markdown("---")
-    st.subheader("⚙️ 3. Ação & Exportação Custeio")
+    st.subheader("⚙️ 3. Ação & Exportação Custeio Automático")
     
     col_a, col_b = st.columns([1, 1])
     with col_a:
         if st.button("▶️ Extrair Tabela Focalizada na Lupa", type="primary"):
-            with st.spinner("Rasterizando e decodificando linhas..."):
+            with st.spinner("Analisando micro-medidas de colunas..."):
                 try:
                     df = extract_table_from_bbox(st.session_state.pdf_bytes, page_num, box, pt_w, pt_h, img_w, img_h)
                     if df is not None and not df.empty:
                         st.session_state.extracted_tables.append(df)
-                        st.success(f"Matriz validada! {len(df)} linhas prontas.")
+                        st.success(f"Nuvem validou! {len(df)} linhas limpas importadas.")
                 except ValueError as ve:
-                    if str(ve) == "SCANNED_PDF": st.error("🚨 PDF ESCANEADO (TIPO IMAGEM): O Software não detectou texto eletrônico de máquina! Isso é como uma foto.")
-                    elif str(ve) == "WRONG_BBOX": st.error("🚨 DESALINHAMENTO TÉCNICO VETORIAL: A extração caiu fora das margens vetoriais do texto do document. Use PDFs com vetores padronizados ou avise-me sobre erro 2B.")
-                    else: st.error(f"Erro Inesperado Python: {str(ve)}")
+                    if str(ve) == "SCANNED_PDF": st.error("🚨 PDF ESCANEADO (Bateu na Barreira!): O PDF não é vetor, logo o motor não consegue separar letras da tinta branca da foto. Exportar arquivos do Catia/AutoCAD Nativo por favor!")
+                    elif str(ve) == "WRONG_BBOX": st.error("🚨 CAIXA VAZIA (Z-Index Erro): Parece que cortou sem texto, ou quem desenhou a planta do chicote usou um eixo marginal escondido! Mande no CHAT que deu Erro 2B para calibrarmos.")
+                    else: st.error(f"Erro Incomum: {str(ve)}")
                 except Exception as e:
-                    st.error(f"Ocorreu um Erro Crítico do Servidor: {str(e)}")
+                    st.error(f"Erro Crítico Total: {str(e)}")
 
     with col_b:
-        st.write(f"Na Memória (Prontas): **{len(st.session_state.extracted_tables)} aba(s)**")
-        if st.button("🗑️ Resetar Tudo (Limpar Fila)"):
+        st.write(f"Estocadas na Memória Principal: **{len(st.session_state.extracted_tables)} aba(s)**")
+        if st.button("🗑️ Esvaziar Extrator (Começar do Zero)"):
             st.session_state.extracted_tables = []
             st.rerun()
 
     if len(st.session_state.extracted_tables) > 0:
-        st.markdown("### Base de Dados (Última Extraída):")
-        st.dataframe(st.session_state.extracted_tables[-1].head(10), use_container_width=True)
+        st.markdown("### Prévia Oficial:")
+        st.dataframe(st.session_state.extracted_tables[-1].head(10))
         
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
@@ -171,11 +191,11 @@ if uploaded_file is not None:
                 format_excel(writer, sheet_name)
         
         st.download_button(
-            label="📁 BAixar Planilha Completa de Excel (Formatada)",
+            label="📁 BAixar Planilha Excel JD-Blue (Totalmente Formatada)",
             data=excel_buffer.getvalue(),
-            file_name="BOM_Corporativo.xlsx",
+            file_name="BOM_Dados_Gerais_Web_V2.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary"
         )
 else:
-    st.info("👈 Alimente o sistema via Painel Lateral e inicie o extrator.")
+    st.info("👈 Operação aguardando PDF Vetorial de Engenharia no menu lateral.")
