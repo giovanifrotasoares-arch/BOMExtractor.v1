@@ -1,6 +1,12 @@
 import streamlit as st
 from streamlit_cropper import st_cropper
 import fitz
+import streamlit as st
+from streamlit_cropper import st_cropper
+import fitz
+import pdfplumber          # <-- adicione ESSA LINHA que estava faltando!!
+import pandas as pd
+import io
 import pandas as pd
 import io
 from PIL import Image
