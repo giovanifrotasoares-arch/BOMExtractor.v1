@@ -1,6 +1,7 @@
 import fitz
 import pdfplumber
 import pandas as pd
+import io
 from PIL import Image
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 # Aumentamos o Zoom para 3.0 (Altíssima Definição) para a Lupa não borrar
@@ -31,7 +32,10 @@ def extract_table_from_bbox(pdf_bytes, page_num, bbox, pt_width, pt_height, img_
         (bottom * ratio_y) + 1
     )
     
-    with pdfplumber.open(pdf_bytes) as pdf:
+    # --- CORREÇÃO DO BUG NA NUVEM: Embrulhando Bytes em Buffer ---
+    pdf_stream = io.BytesIO(pdf_bytes)
+    
+    with pdfplumber.open(pdf_stream) as pdf:
         page = pdf.pages[page_num]
         cropped = page.within_bbox(pdf_bbox)
         
