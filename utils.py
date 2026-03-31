@@ -13,6 +13,19 @@ def get_page_image(pdf_bytes, page_num, zoom=3.0):
     
     img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
     return img, page.rect.width, page.rect.height, pix.width, pix.height
+# --- CORREÇÃO DE BUG: Renomear Colunas Duplicadas que quebram a Nuvem ---
+def deduplicate_columns(cols):
+    seen = {}
+    new_cols = []
+    for c in cols:
+        c_str = str(c) if c else "Vazio"
+        if c_str in seen:
+            seen[c_str] += 1
+            new_cols.append(f"{c_str}_{seen[c_str]}")
+        else:
+            seen[c_str] = 0
+            new_cols.append(c_str)
+    return new_cols
 def extract_table_from_bbox(pdf_bytes, page_num, bbox, pt_width, pt_height, img_width, img_height):
     ratio_x = pt_width / img_width
     ratio_y = pt_height / img_height
@@ -24,7 +37,7 @@ def extract_table_from_bbox(pdf_bytes, page_num, bbox, pt_width, pt_height, img_
     right = left + width
     bottom = top + height
     
-    # Margem de segurança sutil (expande o quadro 1pt matemático) para não cortar letras nas bordas
+    # Margem de segurança sutil
     pdf_bbox = (
         (left * ratio_x) - 1,
         (top * ratio_y) - 1,
@@ -32,7 +45,6 @@ def extract_table_from_bbox(pdf_bytes, page_num, bbox, pt_width, pt_height, img_
         (bottom * ratio_y) + 1
     )
     
-    # --- CORREÇÃO DO BUG NA NUVEM: Embrulhando Bytes em Buffer ---
     pdf_stream = io.BytesIO(pdf_bytes)
     
     with pdfplumber.open(pdf_stream) as pdf:
@@ -61,7 +73,8 @@ def extract_table_from_bbox(pdf_bytes, page_num, bbox, pt_width, pt_height, img_
                     
             table = cleaned_table
             if len(table) > 1:
-                return pd.DataFrame(table[1:], columns=table[0])
+                unique_cols = deduplicate_columns(table[0])
+                return pd.DataFrame(table[1:], columns=unique_cols)
             elif len(table) == 1:
                 return pd.DataFrame(table)
             
