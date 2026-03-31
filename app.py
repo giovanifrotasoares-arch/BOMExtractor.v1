@@ -4,11 +4,9 @@ import fitz  # PyMuPDF
 import pandas as pd
 import io
 import utils
-
 # Configurations
 st.set_page_config(page_title="Extrator Visual BOM", layout="wide", page_icon="🚜")
 st.title("🚜 Extrator Automotivo BOM - Inteligência PDF")
-
 st.markdown("""
 <div style='background-color: #2F4F4F; padding: 15px; border-radius: 10px; color: white; font-size: 14px;'>
 <strong>💡 Manual de Operação de Precisão Web:</strong><br><br>
@@ -19,7 +17,6 @@ Para extrair um PDF enorme com letras minúsculas sem errar o quadro, nós const
 2. Olhe para a Seção Ocular (Lupa) logo abaixo da imagem! Ela projetará um <b>Zoom Gigante e Nítido</b> do que o quadrado vermelho está tocando. Você ajusta o quadrado e a lupa ajusta instantaneamente pra você refinar a captura antes de clicar em Extrair!
 </div>
 """, unsafe_allow_html=True)
-
 # Session state initialization
 if 'pdf_bytes' not in st.session_state:
     st.session_state.pdf_bytes = None
@@ -27,10 +24,8 @@ if 'page_count' not in st.session_state:
     st.session_state.page_count = 0
 if 'extracted_tables' not in st.session_state:
     st.session_state.extracted_tables = []
-
 st.sidebar.markdown("### Configuração")
 uploaded_file = st.sidebar.file_uploader("1. Faça o Upload do PDF", type=['pdf'])
-
 if uploaded_file is not None:
     st.session_state.pdf_bytes = uploaded_file.read()
     
@@ -81,13 +76,11 @@ if uploaded_file is not None:
                         st.error(f"Erro Inesperado: {str(ve)}")
                 except Exception as e:
                     st.error(f"Ocorreu um Erro Crítico: {str(e)}")
-
     with col_b:
         st.write(f"Tabelas Prontas na Fila: **{len(st.session_state.extracted_tables)}**")
         if st.button("🗑️ Limpar Fila (Reset)"):
             st.session_state.extracted_tables = []
             st.rerun()
-
     if len(st.session_state.extracted_tables) > 0:
         st.markdown("### Prévia da Última Tabela Estocada:")
         st.dataframe(st.session_state.extracted_tables[-1].head(10), use_container_width=True)
